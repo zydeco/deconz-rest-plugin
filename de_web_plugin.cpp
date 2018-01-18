@@ -1028,7 +1028,36 @@ qint64 DeRestPluginPrivate::getUptime()
 void DeRestPluginPrivate::addLightNode(const deCONZ::Node *node)
 {
     DBG_Assert(node != 0);
-    if (!node || node->isEndDevice())
+    QString modelId = loadModelIdFromDb(node);
+    if (modelId.isEmpty() && (node->address().ext() & macPrefixMask) == jennicMacPrefix) {
+        // find model ID from node
+        QList<deCONZ::SimpleDescriptor>::const_iterator i = node->simpleDescriptors().constBegin();
+        QList<deCONZ::SimpleDescriptor>::const_iterator end = node->simpleDescriptors().constEnd();
+        for (;i != end; ++i)
+        {
+            for (int c = 0; c < i->inClusters().size(); c++)
+            {
+                if (i->inClusters()[c].id() != BASIC_CLUSTER_ID) continue;
+                std::vector<deCONZ::ZclAttribute>::const_iterator j = i->inClusters()[c].attributes().begin();
+                std::vector<deCONZ::ZclAttribute>::const_iterator jend = i->inClusters()[c].attributes().end();
+
+                for (; j != jend; ++j)
+                {
+                    if (modelId.isEmpty() && j->id() == 0x0005) // model id
+                    {
+                        modelId = j->toString().trimmed();
+                        XXX("addLightNode node modelId %s", qPrintable(modelId));
+                        break;
+                    }
+                }
+                if (!modelId.isEmpty()) break;
+            }
+            if (!modelId.isEmpty()) break;
+        }
+    }
+    
+    // Xiaomi wall switch is an end device, but acts as a light
+    if (!node || (node->isEndDevice() && !modelId.startsWith(QLatin1String("lumi.ctrl_neutral"))))
     {
         return;
     }
@@ -1143,6 +1172,11 @@ void DeRestPluginPrivate::addLightNode(const deCONZ::Node *node)
                 case DEV_ID_ZLL_COLOR_TEMPERATURE_LIGHT:
                 case DEV_ID_Z30_COLOR_TEMPERATURE_LIGHT:
                     {
+                        if (modelId == QLatin1String("lumi.ctrl_neutral1"))
+                        {
+                            // Xiaomi Aqara wall switch - only device 0xFFFF is switch
+                            break;
+                        }
                         if (hasServerOnOff)
                         {
                             lightNode.setHaEndpoint(*i);
@@ -1162,6 +1196,15 @@ void DeRestPluginPrivate::addLightNode(const deCONZ::Node *node)
                     }
                     break;
 
+                case 0xFFFF:
+                    {
+                        // Xiaomi Aqara single wall switch QBKG04LM
+                        if (modelId == QLatin1String("lumi.ctrl_neutral1") && i->endpoint() == 0x02 && hasServerOnOff)
+                        {
+                            lightNode.setHaEndpoint(*i);
+                        }
+                    }
+                    break;
                 default:
                     {
                     }
@@ -1220,6 +1263,12 @@ void DeRestPluginPrivate::addLightNode(const deCONZ::Node *node)
                 closeDb();
                 lightNode.setNeedSaveDatabase(true);
             }
+            
+            if (lightNode.modelId().isEmpty() && !modelId.isEmpty())
+            {
+                lightNode.setModelId(modelId);
+                lightNode.setNeedSaveDatabase(true);
+            }
 
             if ((node->address().ext() & macPrefixMask) == philipsMacPrefix)
             {
@@ -1228,6 +1277,12 @@ void DeRestPluginPrivate::addLightNode(const deCONZ::Node *node)
                     lightNode.setManufacturerName(QLatin1String("Philips"));
                     lightNode.setNeedSaveDatabase(true);
                 }
+            }
+            
+            if (lightNode.modelId().startsWith("lumi.") && (lightNode.manufacturer().isEmpty() || lightNode.manufacturer() == QLatin1String("Unknown")))
+            {
+                lightNode.setManufacturerName(QLatin1String("LUMI"));
+                lightNode.setNeedSaveDatabase(true);
             }
 
             if (lightNode.modelId() == QLatin1String("FLS-PP3 White"))
@@ -1487,7 +1542,13 @@ LightNode *DeRestPluginPrivate::updateLightNode(const deCONZ::NodeEvent &event)
             case DEV_ID_Z30_ONOFF_PLUGIN_UNIT:
             case DEV_ID_ZLL_ONOFF_SENSOR:
                 break;
-
+            case 0xFFFF:
+                {
+                    // Xiaomi Aqara wall switch
+                    if ((event.node()->address().ext() & macPrefixMask) == jennicMacPrefix && i->endpoint() == 0x02) {
+                        break;
+                    }
+                }
             default:
                 continue;
             }
@@ -6898,6 +6959,15 @@ void DeRestPluginPrivate::nodeEvent(const deCONZ::NodeEvent &event)
         switch (event.clusterId())
         {
         // sensor node?
+        case BASIC_CLUSTER_ID:
+            {
+                // light node, might be Xiaomi Aqara
+                if ((event.node()->address().ext() & macPrefixMask) == jennicMacPrefix)
+                {
+                    addLightNode(event.node());
+                    updateLightNode(event);
+                }
+            }
         case POWER_CONFIGURATION_CLUSTER_ID:
         case ONOFF_CLUSTER_ID:
         case ONOFF_SWITCH_CONFIGURATION_CLUSTER_ID:
@@ -6908,7 +6978,6 @@ void DeRestPluginPrivate::nodeEvent(const deCONZ::NodeEvent &event)
         case PRESSURE_MEASUREMENT_CLUSTER_ID:
         case OCCUPANCY_SENSING_CLUSTER_ID:
         case IAS_ZONE_CLUSTER_ID:
-        case BASIC_CLUSTER_ID:
         case ANALOG_INPUT_CLUSTER_ID:
         case MULTISTATE_INPUT_CLUSTER_ID:
             {

@@ -1056,6 +1056,7 @@ public:
     void loadAllResourcelinksFromDb();
     void loadAllScenesFromDb();
     void loadAllSchedulesFromDb();
+    QString loadModelIdFromDb(const deCONZ::Node *node);
     void loadLightNodeFromDb(LightNode *lightNode);
     void loadGroupFromDb(Group *group);
     void loadSceneFromDb(Scene *scene);

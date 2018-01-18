@@ -24,6 +24,7 @@
 static int sqliteLoadAuthCallback(void *user, int ncols, char **colval , char **colname);
 static int sqliteLoadConfigCallback(void *user, int ncols, char **colval , char **colname);
 static int sqliteLoadUserparameterCallback(void *user, int ncols, char **colval , char **colname);
+static int sqliteLoadModelIdCallback(void *user, int ncols, char **colval , char **colname);
 static int sqliteLoadLightNodeCallback(void *user, int ncols, char **colval , char **colname);
 static int sqliteLoadAllGroupsCallback(void *user, int ncols, char **colval , char **colname);
 static int sqliteLoadAllResourcelinksCallback(void *user, int ncols, char **colval , char **colname);
@@ -1154,6 +1155,25 @@ void DeRestPluginPrivate::loadAllSchedulesFromDb()
     }
 }
 
+/*! Sqlite callback to load model ID for a node (identified by its mac address).
+ */
+static int sqliteLoadModelIdCallback(void *user, int ncols, char **colval , char **colname)
+{
+    DBG_Assert(user != 0);
+
+    if (!user || (ncols <= 0))
+    {
+        return 0;
+    }
+    
+    QString *modelId = static_cast<QString*>(user);
+    if (colval[0] && (colval[0][0] != '\0')) {
+        *modelId = QString::fromUtf8(colval[0]);
+    }
+    
+    return 0;
+}
+
 /*! Sqlite callback to load data for a node (identified by its mac address).
  */
 static int sqliteLoadLightNodeCallback(void *user, int ncols, char **colval , char **colname)
@@ -1294,6 +1314,41 @@ static int sqliteLoadLightNodeCallback(void *user, int ncols, char **colval , ch
     }
 
     return 0;
+}
+
+QString DeRestPluginPrivate::loadModelIdFromDb(const deCONZ::Node *node)
+{
+    int rc;
+    char *errmsg = 0;
+    QString modelId;
+    
+    DBG_Assert(db != 0);
+    DBG_Assert(node != 0);
+
+    if (!db || !node)
+    {
+        return modelId;
+    }
+    
+    // check for new uniqueId format
+    QString uid = generateUniqueId(node->address().ext(), 0xff, 0);
+    uid.replace(24, 2, QLatin1String("%"));
+    QString sql = QString("SELECT modelid FROM nodes WHERE mac like '%1' COLLATE NOCASE").arg(uid);
+    
+    DBG_Printf(DBG_INFO_L2, "sql exec %s\n", qPrintable(sql));
+    
+    rc = sqlite3_exec(db, qPrintable(sql), sqliteLoadModelIdCallback, &modelId, &errmsg);
+
+    if (rc != SQLITE_OK)
+    {
+        if (errmsg)
+        {
+            DBG_Printf(DBG_ERROR_L2, "sqlite3_exec %s, error: %s\n", qPrintable(sql), errmsg);
+            sqlite3_free(errmsg);
+        }
+    }
+    
+    return modelId;
 }
 
 /*! Loads data (if available) for a LightNode from the database.
